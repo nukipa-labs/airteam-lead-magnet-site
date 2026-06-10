@@ -1,11 +1,18 @@
 import type { jsPDF } from "jspdf";
-import type { AddressResult, OfferSpec, Pitch, Pricing, RoofSection } from "../types";
+import type {
+  AddressResult,
+  CompanyProfile,
+  OfferSpec,
+  Pitch,
+  Pricing,
+  RoofSection,
+} from "../types";
 import type { RoofTotals } from "./roofMath";
 import { computeEstimate } from "./pricing";
 
 type T = (k: string, vars?: Record<string, string | number>) => string;
 
-const BRAND: [number, number, number] = [35, 231, 165];
+const FALLBACK_ACCENT: [number, number, number] = [35, 231, 165];
 const INK: [number, number, number] = [14, 16, 16];
 const MUTED: [number, number, number] = [107, 114, 128];
 const HAIR: [number, number, number] = [225, 228, 228];
@@ -17,6 +24,12 @@ function hexToRgb(hex: string): [number, number, number] {
     parseInt(h.slice(2, 4), 16),
     parseInt(h.slice(4, 6), 16),
   ];
+}
+/** Parse a user-entered accent colour, falling back to the brand teal. */
+function safeAccent(hex: string): [number, number, number] {
+  return /^#?[0-9a-fA-F]{6}$/.test((hex || "").trim())
+    ? hexToRgb(hex.trim())
+    : FALLBACK_ACCENT;
 }
 function lighten(rgb: [number, number, number], amt = 0.55): [number, number, number] {
   return rgb.map((c) => Math.round(c + (255 - c) * amt)) as [number, number, number];
@@ -30,19 +43,21 @@ export type OfferPdfData = {
   pitch: Pitch;
   spec: OfferSpec;
   pricing: Pricing;
+  company: CompanyProfile;
   totals: RoofTotals;
 };
 
 export async function generateOfferPdf(d: OfferPdfData) {
   const { jsPDF } = await import("jspdf"); // lazy-loaded so it stays off the landing bundle
-  const { t, lang, address, sections, pitch, spec, pricing, totals } = d;
+  const { t, lang, address, sections, pitch, spec, pricing, company, totals } = d;
+  const ACCENT = safeAccent(company.accent);
+  const ACCENT_SOFT = lighten(ACCENT, 0.82);
   const est = computeEstimate(
     pricing,
     {
       material: spec.material,
       scope: spec.scope,
-      removeOld: spec.removeOld,
-      insulation: spec.insulation,
+      selectedAddons: spec.selectedAddons,
     },
     totals.surfaceM2
   );
@@ -71,25 +86,28 @@ export async function generateOfferPdf(d: OfferPdfData) {
     month: "long",
     day: "numeric",
   });
-  const quoteNo = `AT-${now.getFullYear()}${String(now.getMonth() + 1).padStart(
-    2,
-    "0"
-  )}${String(now.getDate()).padStart(2, "0")}-${String(
+  const quotePrefix =
+    (company.name.match(/\b\p{L}/gu)?.join("").slice(0, 3).toUpperCase()) ||
+    "ANG";
+  const quoteNo = `${quotePrefix}-${now.getFullYear()}${String(
+    now.getMonth() + 1
+  ).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(
     Math.floor(now.getTime() / 1000) % 1000
   ).padStart(3, "0")}`;
 
-  // ---- Top brand band ----
-  doc.setFillColor(...BRAND);
+  // ---- Top accent band (roofer's colour) ----
+  doc.setFillColor(...ACCENT);
   doc.rect(0, 0, PW, 4, "F");
 
-  // ---- Logo ----
+  // ---- Company wordmark ----
   y = 20;
-  doc.setFillColor(...BRAND);
-  doc.triangle(M, y, M + 5.5, y - 9.5, M + 11, y, "F");
+  const companyName = (company.name || t("pdf.companyFallback")).trim();
+  doc.setFillColor(...ACCENT);
+  doc.roundedRect(M, y - 7, 7, 7, 1.4, 1.4, "F");
   doc.setTextColor(...INK);
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(20);
-  doc.text("airteam", M + 13, y - 0.5);
+  doc.setFontSize(17);
+  doc.text(companyName, M + 10, y - 1.5, { maxWidth: 108 });
 
   // ---- Quote title (right) ----
   doc.setFont("helvetica", "bold");
@@ -117,7 +135,14 @@ export async function generateOfferPdf(d: OfferPdfData) {
   doc.setFontSize(10);
   doc.setTextColor(...INK);
 
-  const fromLines = ["Airteam GmbH", "Musterstraße 1", "10117 Berlin", "airteam.ai"];
+  const fromLines = [
+    companyName,
+    company.street || "",
+    company.city || "",
+    company.phone || "",
+    company.email || "",
+    company.website || "",
+  ].filter(Boolean);
   const customer = (spec.name || "—").trim();
   const forLines = [
     customer,
@@ -129,7 +154,7 @@ export async function generateOfferPdf(d: OfferPdfData) {
   forLines.forEach((l, i) => doc.text(l, colR, y + 6 + i * 5));
 
   // ---- Object address ----
-  y = 66;
+  y = 44 + Math.max(fromLines.length, forLines.length) * 5 + 6;
   label(t("pdf.object"), M, y);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
@@ -151,7 +176,7 @@ export async function generateOfferPdf(d: OfferPdfData) {
   const chipW = (W - 4 * 3) / 5;
   chips.forEach(([val, lab], i) => {
     const x = M + i * (chipW + 3);
-    doc.setFillColor(240, 251, 243);
+    doc.setFillColor(...ACCENT_SOFT);
     doc.roundedRect(x, y, chipW, 16, 1.5, 1.5, "F");
     doc.setFont("helvetica", "bold");
     doc.setFontSize(i === 4 ? 8.5 : 11);
@@ -169,12 +194,12 @@ export async function generateOfferPdf(d: OfferPdfData) {
   // ---- Roof schematic ----
   label(t("pdf.yourRoof"), M, y);
   y += 3;
-  const boxH = 38;
+  const boxH = 32;
   doc.setDrawColor(...HAIR);
   doc.setFillColor(250, 250, 250);
   doc.roundedRect(M, y, W, boxH, 1.5, 1.5, "FD");
   drawRoofSchematic(doc, sections, M + 4, y + 4, W - 8, boxH - 8);
-  y += boxH + 8;
+  y += boxH + 6;
 
   // ---- Line items table ----
   const cols = { item: M, qty: M + 96, unit: M + 124, amount: M + W };
@@ -196,38 +221,32 @@ export async function generateOfferPdf(d: OfferPdfData) {
       money(est.tileRate),
       money(est.coveringAmount),
     ],
+    ...est.addonLines.map(
+      (l): [string, string, string, string] => [
+        l.name,
+        `${num(totals.surfaceM2)} m²`,
+        money(l.rate),
+        money(l.amount),
+      ]
+    ),
   ];
-  if (spec.removeOld)
-    rows.push([
-      t("pdf.removeOldLine"),
-      `${num(totals.surfaceM2)} m²`,
-      money(pricing.removeOldRate),
-      money(est.removeOldAmount),
-    ]);
-  if (spec.insulation)
-    rows.push([
-      t("pdf.insulationLine"),
-      `${num(totals.surfaceM2)} m²`,
-      money(pricing.insulationRate),
-      money(est.insulationAmount),
-    ]);
 
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
+  doc.setFontSize(8.5);
   rows.forEach((r, i) => {
-    const rh = 9;
+    const rh = 7.4;
     if (i % 2 === 1) {
       doc.setFillColor(248, 248, 248);
       doc.rect(M, y, W, rh, "F");
     }
     doc.setTextColor(...INK);
-    doc.text(doc.splitTextToSize(r[0], 90), cols.item + 2, y + 5.6);
+    doc.text(doc.splitTextToSize(r[0], 90)[0], cols.item + 2, y + 4.9);
     doc.setTextColor(...MUTED);
-    doc.text(r[1], cols.qty, y + 5.6, { align: "right" });
-    doc.text(r[2], cols.unit, y + 5.6, { align: "right" });
+    doc.text(r[1], cols.qty, y + 4.9, { align: "right" });
+    doc.text(r[2], cols.unit, y + 4.9, { align: "right" });
     doc.setTextColor(...INK);
     doc.setFont("helvetica", "bold");
-    doc.text(r[3], cols.amount - 2, y + 5.6, { align: "right" });
+    doc.text(r[3], cols.amount - 2, y + 4.9, { align: "right" });
     doc.setFont("helvetica", "normal");
     y += rh;
   });
@@ -262,7 +281,7 @@ export async function generateOfferPdf(d: OfferPdfData) {
   doc.setTextColor(255, 255, 255);
   doc.text(t("pdf.total"), M + 6, y + 8);
   doc.setFontSize(18);
-  doc.setTextColor(...BRAND);
+  doc.setTextColor(...ACCENT);
   doc.text(money(est.total), M + W - 6, y + 8.5, { align: "right" });
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
@@ -282,12 +301,12 @@ export async function generateOfferPdf(d: OfferPdfData) {
   doc.text(doc.splitTextToSize(t("pdf.disclaimer"), W), M, y);
   doc.text(t("pdf.vatNote"), M, y + 10);
 
-  // footer band
+  // footer band — subtle "powered by" (the roofer's brand owns the document)
   doc.setDrawColor(...HAIR);
   doc.line(M, 285, M + W, 285);
   doc.setFontSize(7.5);
   doc.setTextColor(...MUTED);
-  doc.text(t("pdf.footer"), PW / 2, 290, { align: "center" });
+  doc.text(t("pdf.poweredBy"), PW / 2, 290, { align: "center" });
 
   const safeAddr = address.label
     .split(",")[0]

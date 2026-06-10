@@ -36,19 +36,37 @@ export type Tile = {
   rate: number;
 };
 
+/** An optional roofing position (Position) priced per m² of roof surface. */
+export type Addon = {
+  id: string;
+  name: string;
+  rate: number;
+};
+
 /** Business-editable pricing config (persisted to localStorage). */
 export type Pricing = {
   tiles: Tile[];
-  removeOldRate: number;
-  insulationRate: number;
+  addons: Addon[];
+};
+
+/** The roofer's company identity — used to white-label the offer PDF. */
+export type CompanyProfile = {
+  name: string;
+  street: string;
+  city: string;
+  phone: string;
+  email: string;
+  website: string;
+  /** Accent colour (hex) applied throughout the generated PDF. */
+  accent: string;
 };
 
 export type OfferSpec = {
   pitchKey: string;
   material: string;
   scope: string;
-  removeOld: boolean;
-  insulation: boolean;
+  /** Ids of the addon positions selected for this offer. */
+  selectedAddons: string[];
   postcode: string;
   name: string;
   email: string;

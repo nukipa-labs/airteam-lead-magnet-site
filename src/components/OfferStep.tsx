@@ -2,11 +2,22 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { PITCHES, totals, fmt } from "../lib/roofMath";
-import { usePricing, computeEstimate } from "../lib/pricing";
+import {
+  usePricing,
+  useCompany,
+  computeEstimate,
+  DEFAULT_SELECTED_ADDONS,
+} from "../lib/pricing";
 import { generateOfferPdf } from "../lib/offerPdf";
 import { submitLead } from "../lib/submitLead";
 import { useI18n } from "../i18n";
-import type { AddressResult, OfferSpec, RoofSection, Tile } from "../types";
+import type {
+  AddressResult,
+  CompanyProfile,
+  OfferSpec,
+  Pricing,
+  RoofSection,
+} from "../types";
 
 const SCOPES = [
   { key: "new", labelKey: "scope.new" },
@@ -24,6 +35,7 @@ type Props = {
 export function OfferStep({ address, sections, pitchKey, onBack }: Props) {
   const { t, lang } = useI18n();
   const { pricing, setPricing, reset } = usePricing(t);
+  const { company, setCompany } = useCompany();
   const pitch = PITCHES.find((p) => p.key === pitchKey) ?? PITCHES[2];
   const tot = totals(sections, pitch.angleDeg);
 
@@ -31,8 +43,7 @@ export function OfferStep({ address, sections, pitchKey, onBack }: Props) {
     pitchKey,
     material: pricing.tiles[0]?.id ?? "tile",
     scope: "new",
-    removeOld: true,
-    insulation: false,
+    selectedAddons: DEFAULT_SELECTED_ADDONS,
     postcode: "",
     name: "",
     email: "",
@@ -41,40 +52,11 @@ export function OfferStep({ address, sections, pitchKey, onBack }: Props) {
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [showPricing, setShowPricing] = useState(false);
-
-  // Send the lead + measured-roof context to the Nukipa CMS form, then show
-  // the confirmation. Capture is best-effort: if the gateway can't resolve
-  // the tenant (e.g. a local preview not served on the tenant host) we still
-  // show success rather than blocking the visitor, but log for debugging.
-  async function handleSubmit() {
-    setSubmitting(true);
-    try {
-      await submitLead({
-        name: spec.name,
-        email: spec.email,
-        phone: spec.phone,
-        postcode: spec.postcode,
-        address: address.label,
-        material: estimate.tileName,
-        scope: spec.scope,
-        pitch: t(pitch.labelKey),
-        roof_surface_m2: Math.round(tot.surfaceM2),
-        footprint_m2: Math.round(tot.footprintM2),
-        sections: tot.sectionCount,
-        price_low: Math.round(estimate.low),
-        price_high: Math.round(estimate.high),
-      });
-    } catch (e) {
-      console.error("Lead submission failed:", e);
-    } finally {
-      setSubmitting(false);
-      setSubmitted(true);
-    }
-  }
+  const [showCompany, setShowCompany] = useState(false);
 
   // Keep the selected material valid if it gets removed in the editor.
   useEffect(() => {
-    if (!pricing.tiles.some((t) => t.id === spec.material)) {
+    if (!pricing.tiles.some((tl) => tl.id === spec.material)) {
       setSpec((s) => ({ ...s, material: pricing.tiles[0]?.id ?? "" }));
     }
   }, [pricing.tiles, spec.material]);
@@ -86,8 +68,7 @@ export function OfferStep({ address, sections, pitchKey, onBack }: Props) {
         {
           material: spec.material,
           scope: spec.scope,
-          removeOld: spec.removeOld,
-          insulation: spec.insulation,
+          selectedAddons: spec.selectedAddons,
         },
         tot.surfaceM2
       ),
@@ -104,6 +85,45 @@ export function OfferStep({ address, sections, pitchKey, onBack }: Props) {
   const update = (patch: Partial<OfferSpec>) =>
     setSpec((s) => ({ ...s, ...patch }));
 
+  const toggleAddon = (id: string) =>
+    setSpec((s) => ({
+      ...s,
+      selectedAddons: s.selectedAddons.includes(id)
+        ? s.selectedAddons.filter((a) => a !== id)
+        : [...s.selectedAddons, id],
+    }));
+
+  // Send the lead + measured-roof context to the Nukipa CMS form, then show the
+  // confirmation. Best-effort: a failed capture still shows success rather than
+  // blocking the visitor.
+  async function handleSubmit() {
+    setSubmitting(true);
+    try {
+      await submitLead({
+        name: spec.name,
+        email: spec.email,
+        phone: spec.phone,
+        postcode: spec.postcode,
+        address: address.label,
+        material: estimate.tileName,
+        scope: spec.scope,
+        pitch: t(pitch.labelKey),
+        options: estimate.addonLines.map((l) => l.name).join(", "),
+        company: company.name,
+        roof_surface_m2: Math.round(tot.surfaceM2),
+        footprint_m2: Math.round(tot.footprintM2),
+        sections: tot.sectionCount,
+        price_low: Math.round(estimate.low),
+        price_high: Math.round(estimate.high),
+      });
+    } catch (e) {
+      console.error("Lead submission failed:", e);
+    } finally {
+      setSubmitting(false);
+      setSubmitted(true);
+    }
+  }
+
   const downloadPdf = () =>
     generateOfferPdf({
       t,
@@ -113,6 +133,7 @@ export function OfferStep({ address, sections, pitchKey, onBack }: Props) {
       pitch,
       spec,
       pricing,
+      company,
       totals: tot,
     });
 
@@ -172,6 +193,34 @@ export function OfferStep({ address, sections, pitchKey, onBack }: Props) {
         </h2>
         <p className="mt-1 text-muted">{t("offer.sub")}</p>
 
+        {/* Company (white-labels the PDF) */}
+        <Field label={t("offer.company")}>
+          <button
+            onClick={() => setShowCompany((v) => !v)}
+            className="flex w-full items-center gap-2 rounded-xl border border-black/10 px-3 py-2.5 text-left text-sm font-semibold transition hover:border-black/20"
+          >
+            <span
+              className="h-4 w-4 shrink-0 rounded-full border border-black/10"
+              style={{ background: company.accent }}
+            />
+            <span className="flex-1 truncate text-ink">
+              {company.name || t("offer.companyName")}
+            </span>
+            <svg
+              className={`h-4 w-4 text-muted transition ${showCompany ? "rotate-90" : ""}`}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+            >
+              <path d="m9 6 6 6-6 6" />
+            </svg>
+          </button>
+          {showCompany && (
+            <CompanyEditor company={company} onChange={setCompany} />
+          )}
+        </Field>
+
         <Field label={t("offer.material")}>
           <div className="grid grid-cols-2 gap-2">
             {pricing.tiles.map((m) => (
@@ -203,13 +252,7 @@ export function OfferStep({ address, sections, pitchKey, onBack }: Props) {
             {t("offer.customize")}
           </button>
           {showPricing && (
-            <PricingEditor
-              tiles={pricing.tiles}
-              removeOldRate={pricing.removeOldRate}
-              insulationRate={pricing.insulationRate}
-              onChange={setPricing}
-              onReset={reset}
-            />
+            <PricingEditor pricing={pricing} onChange={setPricing} onReset={reset} />
           )}
         </Field>
 
@@ -228,17 +271,17 @@ export function OfferStep({ address, sections, pitchKey, onBack }: Props) {
         </Field>
 
         <Field label={t("offer.options")}>
+          <p className="-mt-1 mb-2 text-xs text-muted">{t("offer.optionsHint")}</p>
           <div className="flex flex-col gap-2">
-            <Toggle
-              checked={spec.removeOld}
-              onChange={(v) => update({ removeOld: v })}
-              label={t("offer.removeOld")}
-            />
-            <Toggle
-              checked={spec.insulation}
-              onChange={(v) => update({ insulation: v })}
-              label={t("offer.insulation")}
-            />
+            {pricing.addons.map((a) => (
+              <Toggle
+                key={a.id}
+                checked={spec.selectedAddons.includes(a.id)}
+                onChange={() => toggleAddon(a.id)}
+                label={a.name}
+                hint={`+ ${money(a.rate)}/m²`}
+              />
+            ))}
           </div>
         </Field>
 
@@ -317,70 +360,234 @@ export function OfferStep({ address, sections, pitchKey, onBack }: Props) {
   );
 }
 
+function CompanyEditor({
+  company,
+  onChange,
+}: {
+  company: CompanyProfile;
+  onChange: (c: CompanyProfile) => void;
+}) {
+  const { t } = useI18n();
+  const set = (patch: Partial<CompanyProfile>) =>
+    onChange({ ...company, ...patch });
+
+  return (
+    <div className="mt-3 rounded-xl border border-black/10 bg-black/[0.02] p-3">
+      <p className="mb-3 text-xs text-muted">{t("offer.companyHint")}</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <SmallInput
+          label={t("offer.companyName")}
+          value={company.name}
+          onChange={(v) => set({ name: v })}
+          full
+        />
+        <SmallInput
+          label={t("offer.companyStreet")}
+          value={company.street}
+          onChange={(v) => set({ street: v })}
+        />
+        <SmallInput
+          label={t("offer.companyCity")}
+          value={company.city}
+          onChange={(v) => set({ city: v })}
+        />
+        <SmallInput
+          label={t("offer.companyPhone")}
+          value={company.phone}
+          onChange={(v) => set({ phone: v })}
+        />
+        <SmallInput
+          label={t("offer.companyEmail")}
+          value={company.email}
+          onChange={(v) => set({ email: v })}
+        />
+        <SmallInput
+          label={t("offer.companyWebsite")}
+          value={company.website}
+          onChange={(v) => set({ website: v })}
+        />
+        <label className="block">
+          <span className="text-[10px] font-bold uppercase tracking-wide text-muted">
+            {t("offer.companyAccent")}
+          </span>
+          <div className="mt-1 flex items-center gap-2">
+            <input
+              type="color"
+              value={company.accent}
+              onChange={(e) => set({ accent: e.target.value })}
+              className="h-9 w-10 shrink-0 cursor-pointer rounded-lg border border-black/10 bg-white p-0.5"
+            />
+            <input
+              value={company.accent}
+              onChange={(e) => set({ accent: e.target.value })}
+              className="w-full rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-sm tabular-nums uppercase outline-none focus:border-brand"
+            />
+          </div>
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function SmallInput({
+  label,
+  value,
+  onChange,
+  full,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  full?: boolean;
+}) {
+  return (
+    <label className={`block ${full ? "sm:col-span-2" : ""}`}>
+      <span className="text-[10px] font-bold uppercase tracking-wide text-muted">
+        {label}
+      </span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="mt-1 w-full rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-brand"
+      />
+    </label>
+  );
+}
+
 function PricingEditor({
-  tiles,
-  removeOldRate,
-  insulationRate,
+  pricing,
   onChange,
   onReset,
 }: {
-  tiles: Tile[];
-  removeOldRate: number;
-  insulationRate: number;
-  onChange: (p: {
-    tiles: Tile[];
-    removeOldRate: number;
-    insulationRate: number;
-  }) => void;
+  pricing: Pricing;
+  onChange: (p: Pricing) => void;
   onReset: () => void;
 }) {
   const { t } = useI18n();
-  const setTiles = (next: Tile[]) =>
-    onChange({ tiles: next, removeOldRate, insulationRate });
 
-  const updateTile = (id: string, patch: Partial<Tile>) =>
-    setTiles(tiles.map((tl) => (tl.id === id ? { ...tl, ...patch } : tl)));
+  const updateTile = (id: string, patch: Partial<Pricing["tiles"][number]>) =>
+    onChange({
+      ...pricing,
+      tiles: pricing.tiles.map((tl) =>
+        tl.id === id ? { ...tl, ...patch } : tl
+      ),
+    });
   const removeTile = (id: string) =>
-    setTiles(tiles.filter((tl) => tl.id !== id));
+    onChange({ ...pricing, tiles: pricing.tiles.filter((tl) => tl.id !== id) });
   const addTile = () =>
-    setTiles([
-      ...tiles,
-      { id: `c_${tiles.length}_${Math.round(performance.now())}`, name: "", rate: 150 },
-    ]);
+    onChange({
+      ...pricing,
+      tiles: [
+        ...pricing.tiles,
+        {
+          id: `c_${pricing.tiles.length}_${Math.round(performance.now())}`,
+          name: "",
+          rate: 150,
+        },
+      ],
+    });
+
+  const updateAddon = (id: string, patch: Partial<Pricing["addons"][number]>) =>
+    onChange({
+      ...pricing,
+      addons: pricing.addons.map((a) =>
+        a.id === id ? { ...a, ...patch } : a
+      ),
+    });
+  const removeAddon = (id: string) =>
+    onChange({ ...pricing, addons: pricing.addons.filter((a) => a.id !== id) });
+  const addAddon = () =>
+    onChange({
+      ...pricing,
+      addons: [
+        ...pricing.addons,
+        {
+          id: `a_${pricing.addons.length}_${Math.round(performance.now())}`,
+          name: "",
+          rate: 20,
+        },
+      ],
+    });
 
   return (
     <div className="mt-3 rounded-xl border border-black/10 bg-black/[0.02] p-3">
       <p className="mb-2 text-xs text-muted">{t("offer.customizeHint")}</p>
 
-      {/* column heads */}
+      <EditorRows
+        nameLabel={t("offer.tileName")}
+        rateLabel={t("offer.ratePerM2")}
+        rows={pricing.tiles}
+        onUpdate={updateTile}
+        onRemove={removeTile}
+        canRemove={pricing.tiles.length > 1}
+      />
+      <AddButton onClick={addTile} label={t("offer.addTile")} />
+
+      <div className="mt-3 border-t border-black/10 pt-3">
+        <EditorRows
+          nameLabel={t("offer.addons")}
+          rateLabel={t("offer.ratePerM2")}
+          rows={pricing.addons}
+          onUpdate={updateAddon}
+          onRemove={removeAddon}
+          canRemove={pricing.addons.length > 1}
+        />
+        <AddButton onClick={addAddon} label={t("offer.addAddon")} />
+      </div>
+
+      <button
+        onClick={onReset}
+        className="mt-3 text-xs font-medium text-muted hover:text-ink hover:underline"
+      >
+        {t("offer.resetPricing")}
+      </button>
+    </div>
+  );
+}
+
+function EditorRows({
+  nameLabel,
+  rateLabel,
+  rows,
+  onUpdate,
+  onRemove,
+  canRemove,
+}: {
+  nameLabel: string;
+  rateLabel: string;
+  rows: { id: string; name: string; rate: number }[];
+  onUpdate: (id: string, patch: { name?: string; rate?: number }) => void;
+  onRemove: (id: string) => void;
+  canRemove: boolean;
+}) {
+  return (
+    <>
       <div className="mb-1 flex items-center gap-2 px-1 text-[10px] font-bold uppercase tracking-wide text-muted">
-        <span className="flex-1">{t("offer.tileName")}</span>
-        <span className="w-20 text-right">{t("offer.ratePerM2")}</span>
+        <span className="flex-1">{nameLabel}</span>
+        <span className="w-20 text-right">{rateLabel}</span>
         <span className="w-6" />
       </div>
       <div className="space-y-1.5">
-        {tiles.map((tl) => (
-          <div key={tl.id} className="flex items-center gap-2">
+        {rows.map((r) => (
+          <div key={r.id} className="flex items-center gap-2">
             <input
-              value={tl.name}
-              onChange={(e) => updateTile(tl.id, { name: e.target.value })}
-              placeholder={t("offer.tileName")}
+              value={r.name}
+              onChange={(e) => onUpdate(r.id, { name: e.target.value })}
+              placeholder={nameLabel}
               className="flex-1 rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-brand"
             />
             <input
               type="number"
               min={0}
-              value={tl.rate}
-              onChange={(e) =>
-                updateTile(tl.id, { rate: Number(e.target.value) || 0 })
-              }
+              value={r.rate}
+              onChange={(e) => onUpdate(r.id, { rate: Number(e.target.value) || 0 })}
               className="w-20 rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-right text-sm tabular-nums outline-none focus:border-brand"
             />
             <button
-              onClick={() => removeTile(tl.id)}
-              disabled={tiles.length <= 1}
+              onClick={() => onRemove(r.id)}
+              disabled={!canRemove}
               className="flex h-7 w-6 items-center justify-center rounded-md text-muted transition hover:bg-red-50 hover:text-red-500 disabled:opacity-30"
-              aria-label="Remove tile"
+              aria-label="Remove row"
             >
               <svg
                 className="h-4 w-4"
@@ -395,69 +602,27 @@ function PricingEditor({
           </div>
         ))}
       </div>
-
-      <button
-        onClick={addTile}
-        className="mt-2 inline-flex items-center gap-1 text-sm font-semibold text-brand-dark hover:underline"
-      >
-        <svg
-          className="h-4 w-4"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-        >
-          <path d="M12 5v14M5 12h14" />
-        </svg>
-        {t("offer.addTile")}
-      </button>
-
-      {/* add-on numbers */}
-      <div className="mt-3 grid grid-cols-2 gap-2 border-t border-black/10 pt-3">
-        <NumField
-          label={t("offer.removeOldRate")}
-          value={removeOldRate}
-          onChange={(v) => onChange({ tiles, removeOldRate: v, insulationRate })}
-        />
-        <NumField
-          label={t("offer.insulationRate")}
-          value={insulationRate}
-          onChange={(v) => onChange({ tiles, removeOldRate, insulationRate: v })}
-        />
-      </div>
-
-      <button
-        onClick={onReset}
-        className="mt-3 text-xs font-medium text-muted hover:text-ink hover:underline"
-      >
-        {t("offer.resetPricing")}
-      </button>
-    </div>
+    </>
   );
 }
 
-function NumField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-}) {
+function AddButton({ onClick, label }: { onClick: () => void; label: string }) {
   return (
-    <label className="block">
-      <span className="text-[10px] font-bold uppercase tracking-wide text-muted">
-        {label}
-      </span>
-      <input
-        type="number"
-        min={0}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value) || 0)}
-        className="mt-1 w-full rounded-lg border border-black/10 bg-white px-2.5 py-1.5 text-sm tabular-nums outline-none focus:border-brand"
-      />
-    </label>
+    <button
+      onClick={onClick}
+      className="mt-2 inline-flex items-center gap-1 text-sm font-semibold text-brand-dark hover:underline"
+    >
+      <svg
+        className="h-4 w-4"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+      >
+        <path d="M12 5v14M5 12h14" />
+      </svg>
+      {label}
+    </button>
   );
 }
 
@@ -519,10 +684,12 @@ function Toggle({
   checked,
   onChange,
   label,
+  hint,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   label: string;
+  hint?: string;
 }) {
   return (
     <button
@@ -530,7 +697,7 @@ function Toggle({
       className="flex items-center gap-3 rounded-xl border border-black/10 px-3 py-2.5 text-left text-sm transition hover:border-black/20"
     >
       <span
-        className={`flex h-5 w-9 items-center rounded-full p-0.5 transition ${
+        className={`flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition ${
           checked ? "bg-brand" : "bg-black/15"
         }`}
       >
@@ -540,7 +707,8 @@ function Toggle({
           }`}
         />
       </span>
-      <span className="font-medium text-ink">{label}</span>
+      <span className="flex-1 font-medium text-ink">{label}</span>
+      {hint && <span className="shrink-0 text-xs text-muted">{hint}</span>}
     </button>
   );
 }
