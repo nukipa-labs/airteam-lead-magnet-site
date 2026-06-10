@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand: #23e7a5;
+  --color-brand-dark: #11c98c;
+  --color-brand-soft: #e8fbf3;
+  --color-ink: #0e1010;
+  --color-ink-2: #1a1c1c;
+  --color-muted: #6b7280;
+  --font-sans: var(--font-inter), "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+:root {
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+html,
+body {
+  margin: 0;
+  background: #ffffff;
+}
+
+/* ---- Leaflet / Geoman tweaks to match the Airteam look ---- */
+.leaflet-container {
+  background: #0e1010;
+  font-family: var(--font-sans);
+}
+
+/* Hide the default Geoman toolbar — we drive drawing from our own UI */
+.leaflet-pm-toolbar {
+  display: none !important;
+}
+
+/* Crosshair while drawing */
+.roof-drawing .leaflet-container {
+  cursor: crosshair !important;
+}
+
+.leaflet-control-attribution {
+  background: rgba(255, 255, 255, 0.7) !important;
+  font-size: 10px !important;
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(35, 231, 165, 0.5);
+  }
+  100% {
+    box-shadow: 0 0 0 12px rgba(35, 231, 165, 0);
+  }
+}
+.pulse-dot {
+  animation: pulse-ring 1.8s infinite;
+}
