@@ -71,6 +71,13 @@ const de: Dict = {
   "offer.cta": "Festpreis-Angebot erhalten",
   "offer.noObligation": "Unverbindlich · Bestätigt per Drohnenscan",
   "offer.downloadPdf": "Angebot als PDF herunterladen",
+  "offer.gateTitle": "Angebot herunterladen",
+  "offer.gateText":
+    "Bitte geben Sie Ihre E-Mail-Adresse ein, um das Angebot als PDF zu erhalten.",
+  "offer.gateEmail": "E-Mail-Adresse",
+  "offer.gateButton": "Herunterladen",
+  "offer.gateCancel": "Abbrechen",
+  "offer.gateInvalid": "Bitte geben Sie eine gültige E-Mail-Adresse ein.",
   "offer.customize": "Eigene Ziegel & Preise",
   "offer.customizeHint":
     "Passen Sie Materialnamen und €/m²-Preise an Ihr Geschäft an. Wird lokal gespeichert.",
@@ -207,6 +214,12 @@ const en: Dict = {
   "offer.cta": "Get my fixed-price offer",
   "offer.noObligation": "No obligation · Confirmed by drone scan",
   "offer.downloadPdf": "Download offer as PDF",
+  "offer.gateTitle": "Download offer",
+  "offer.gateText": "Enter your email address to get the offer as a PDF.",
+  "offer.gateEmail": "Email address",
+  "offer.gateButton": "Download",
+  "offer.gateCancel": "Cancel",
+  "offer.gateInvalid": "Please enter a valid email address.",
   "offer.customize": "Your own tiles & prices",
   "offer.customizeHint":
     "Adjust material names and €/m² prices to match your business. Saved locally.",

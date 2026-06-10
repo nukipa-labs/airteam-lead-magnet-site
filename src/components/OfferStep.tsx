@@ -53,6 +53,13 @@ export function OfferStep({ address, sections, pitchKey, onBack }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [showPricing, setShowPricing] = useState(false);
   const [showCompany, setShowCompany] = useState(false);
+  // Lead has been saved to the Nukipa CRM at least once this session.
+  const [leadCaptured, setLeadCaptured] = useState(false);
+  // Email-capture gate shown before the PDF download.
+  const [gateOpen, setGateOpen] = useState(false);
+  const [gateEmail, setGateEmail] = useState("");
+  const [gateSubmitting, setGateSubmitting] = useState(false);
+  const [gateError, setGateError] = useState<string | null>(null);
 
   // Keep the selected material valid if it gets removed in the editor.
   useEffect(() => {
@@ -93,49 +100,92 @@ export function OfferStep({ address, sections, pitchKey, onBack }: Props) {
         : [...s.selectedAddons, id],
     }));
 
-  // Send the lead + measured-roof context to the Nukipa CMS form, then show the
-  // confirmation. Best-effort: a failed capture still shows success rather than
-  // blocking the visitor.
-  async function handleSubmit() {
-    setSubmitting(true);
+  // The lead payload (measured-roof context + the captured email) sent to the
+  // Nukipa CMS form, which lands in the CRM.
+  const leadValues = (email: string) => ({
+    name: spec.name,
+    email,
+    phone: spec.phone,
+    postcode: spec.postcode,
+    address: address.label,
+    material: estimate.tileName,
+    scope: spec.scope,
+    pitch: t(pitch.labelKey),
+    options: estimate.addonLines.map((l) => l.name).join(", "),
+    company: company.name,
+    roof_surface_m2: Math.round(tot.surfaceM2),
+    footprint_m2: Math.round(tot.footprintM2),
+    sections: tot.sectionCount,
+    price_low: Math.round(estimate.low),
+    price_high: Math.round(estimate.high),
+  });
+
+  // Save the lead to the CRM exactly once per session (deduped via leadCaptured).
+  async function captureLead(email: string) {
+    if (leadCaptured) return;
+    await submitLead(leadValues(email));
+    setLeadCaptured(true);
+  }
+
+  // Capture the lead but never let a slow/failed network block the UI: the
+  // request still fires (and lands in the CRM on the live host), we just stop
+  // awaiting after a few seconds.
+  async function captureLeadSafe(email: string) {
     try {
-      await submitLead({
-        name: spec.name,
-        email: spec.email,
-        phone: spec.phone,
-        postcode: spec.postcode,
-        address: address.label,
-        material: estimate.tileName,
-        scope: spec.scope,
-        pitch: t(pitch.labelKey),
-        options: estimate.addonLines.map((l) => l.name).join(", "),
-        company: company.name,
-        roof_surface_m2: Math.round(tot.surfaceM2),
-        footprint_m2: Math.round(tot.footprintM2),
-        sections: tot.sectionCount,
-        price_low: Math.round(estimate.low),
-        price_high: Math.round(estimate.high),
-      });
+      await Promise.race([
+        captureLead(email),
+        new Promise((r) => setTimeout(r, 4000)),
+      ]);
     } catch (e) {
       console.error("Lead submission failed:", e);
-    } finally {
-      setSubmitting(false);
-      setSubmitted(true);
     }
   }
 
-  const downloadPdf = () =>
+  const buildPdf = (override?: Partial<OfferSpec>) =>
     generateOfferPdf({
       t,
       lang,
       address,
       sections,
       pitch,
-      spec,
+      spec: override ? { ...spec, ...override } : spec,
       pricing,
       company,
       totals: tot,
     });
+
+  // CTA: submit the lead, then show the confirmation.
+  async function handleSubmit() {
+    setSubmitting(true);
+    await captureLeadSafe(spec.email);
+    setSubmitting(false);
+    setSubmitted(true);
+  }
+
+  // Download button: gate behind an email (saved to CRM) the first time.
+  function requestDownload() {
+    if (leadCaptured) {
+      buildPdf();
+      return;
+    }
+    setGateEmail(spec.email || "");
+    setGateError(null);
+    setGateOpen(true);
+  }
+
+  async function confirmGate() {
+    const email = gateEmail.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      setGateError(t("offer.gateInvalid"));
+      return;
+    }
+    setGateSubmitting(true);
+    update({ email }); // reflect into the form so it shows in the PDF / details
+    await captureLeadSafe(email);
+    setGateSubmitting(false);
+    setGateOpen(false);
+    buildPdf({ email });
+  }
 
   if (submitted) {
     return (
@@ -168,7 +218,7 @@ export function OfferStep({ address, sections, pitchKey, onBack }: Props) {
           </p>
         </div>
         <button
-          onClick={downloadPdf}
+          onClick={() => buildPdf()}
           className="mt-5 flex items-center gap-2 rounded-xl bg-ink px-6 py-3.5 text-sm font-bold text-white transition hover:bg-ink-2"
         >
           <PdfIcon /> {t("offer.downloadPdf")}
@@ -345,7 +395,7 @@ export function OfferStep({ address, sections, pitchKey, onBack }: Props) {
               {submitting ? "…" : t("offer.cta")}
             </button>
             <button
-              onClick={downloadPdf}
+              onClick={requestDownload}
               className="flex w-full items-center justify-center gap-2 rounded-xl border border-black/15 py-3 text-sm font-bold text-ink transition hover:bg-black/[0.03]"
             >
               <PdfIcon /> {t("offer.downloadPdf")}
@@ -356,6 +406,88 @@ export function OfferStep({ address, sections, pitchKey, onBack }: Props) {
           </div>
         </div>
       </aside>
+
+      {gateOpen && (
+        <EmailGate
+          email={gateEmail}
+          setEmail={setGateEmail}
+          error={gateError}
+          submitting={gateSubmitting}
+          onConfirm={confirmGate}
+          onCancel={() => setGateOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function EmailGate({
+  email,
+  setEmail,
+  error,
+  submitting,
+  onConfirm,
+  onCancel,
+}: {
+  email: string;
+  setEmail: (v: string) => void;
+  error: string | null;
+  submitting: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-ink/50 p-5 backdrop-blur-sm"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-brand/15">
+          <PdfIcon />
+        </div>
+        <h3 className="text-lg font-extrabold tracking-tight text-ink">
+          {t("offer.gateTitle")}
+        </h3>
+        <p className="mt-1 text-sm text-muted">{t("offer.gateText")}</p>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            onConfirm();
+          }}
+        >
+          <input
+            autoFocus
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder={t("offer.gateEmail")}
+            className="mt-4 w-full rounded-xl border border-black/10 px-3.5 py-2.5 text-sm text-ink outline-none transition focus:border-brand"
+          />
+          {error && <p className="mt-1.5 text-xs text-red-500">{error}</p>}
+          <button
+            type="submit"
+            disabled={submitting}
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-brand py-3 text-sm font-bold text-ink transition enabled:hover:bg-brand-dark enabled:hover:text-white disabled:opacity-50"
+          >
+            {submitting ? "…" : (
+              <>
+                <PdfIcon /> {t("offer.gateButton")}
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="mt-2 w-full rounded-xl py-2 text-sm font-medium text-muted transition hover:text-ink"
+          >
+            {t("offer.gateCancel")}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }
